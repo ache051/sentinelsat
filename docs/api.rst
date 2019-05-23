@@ -106,6 +106,10 @@ all data types, as long as you pass the `id` to the download function.
   # download sorted and reduced products
   api.download_all(products_df_sorted.index)
 
+  # download only band 4 files of each products
+  api.download_all(products_df_sorted.index, band_list=["BO4"])
+
+
 Getting Product Metadata
 ------------------------
 
@@ -131,6 +135,13 @@ to find the exact mapping between them (OpenSearch attributes have a `<solrField
 - `Sentinel-1 attributes <https://github.com/SentinelDataHub/DataHubSystem/blob/master/addon/sentinel-1/src/main/resources/META-INF/sentinel-1.owl>`_
 - `Sentinel-2 attributes <https://github.com/SentinelDataHub/DataHubSystem/blob/master/addon/sentinel-2/src/main/resources/META-INF/sentinel-2.owl>`_
 - `Sentinel-3 attributes <https://github.com/SentinelDataHub/DataHubSystem/blob/master/addon/sentinel-3/src/main/resources/META-INF/sentinel-3.owl>`_
+
+
+A manifest listing the files contained in the product archive and information (size, checksum, url)
+is available through OData protocol and delivered by :meth:`~SentinelAPI.get_product_manifest()`.
+This method returns an array of dictionnaries with an entry for each file with its ID as the key and
+attributes' dictionary as the value.
+
 
 OpenSearch example
 ^^^^^^^^^^^^^^^^^^
@@ -252,6 +263,53 @@ With `full=True` we receive the full metadata available for the product.
    'size': 4633501134,
    'title': 'S1A_IW_SLC__1SDV_20170425T155612_20170425T155639_016302_01AF91_46FF',
    'url': "https://scihub.copernicus.eu/apihub/odata/v1/Products('04548172-c64a-418f-8e83-7a4d148adf1e')/$value"}
+
+Manifest is accessed through OData API:
+
+.. code-clocks:: python
+  >>> api.get_product_manifest('56207257-174a-40d3-b0a2-69b2963a0e13', 'S2B_MSIL1C_20190514T105629_N0207_R094_T31TCJ_20190514T120915')
+  [
+    {'id': 'S2_Level-1C_Product_Metadata',
+     'mimetype': 'text/xml',
+     'size': 44191,
+     'href': './MTD_MSIL1C.xml',
+     'md5sum': 'fa7937f8b6bb880d6617cc991de5e065'
+    },
+    {'id': 'INSPIRE_Metadata',
+     'mimetype': 'text/xml',
+     'size': 18641,
+     'href': './INSPIRE.xml',
+     'md5sum': 'bcabc93a970ba631df77e6b40bd5da11'
+    },
+    {'id': 'HTML_Presentation',
+     'mimetype': 'octet',
+     'size': 5774,
+     'href': './HTML/UserProduct_index.html',
+     'md5sum': 'b5903ca03ba047633e6b8cb31274a4cb'
+    },
+    ...
+    {'id': 'IMG_DATA_Band_60m_1_Tile1_Data',
+     'mimetype': 'application/octet-stream',
+     'size': 47089,
+     'href': './GRANULE/L1C_T31TCJ_A011417_20190514T105747/IMG_DATA/T31TCJ_20190514T105629_B01.jp2',
+     'md5sum': '0f70436b9170393c0cee39212a3cb9b6'
+    },
+    {'id': 'IMG_DATA_Band_10m_1_Tile1_Data',
+     'mimetype': 'application/octet-stream',
+     'size': 751752,
+     'href': './GRANULE/L1C_T31TCJ_A011417_20190514T105747/IMG_DATA/T31TCJ_20190514T105629_B02.jp2',
+     'md5sum': 'ef88d92c3907a4a07e24e5ad933ae67f'
+    },
+    {'id': 'IMG_DATA_Band_10m_2_Tile1_Data',
+     'mimetype': 'application/octet-stream',
+     'size': 802222,
+     'href': './GRANULE/L1C_T31TCJ_A011417_20190514T105747/IMG_DATA/T31TCJ_20190514T105629_B03.jp2',
+     'md5sum': '5450ec81dc8d0f27a83f581defc7c62c'
+    },
+    ...
+ ]
+
+ Manifest information is used to download specific bands in Sentinel-2 products.
 
 
 LTA-Products

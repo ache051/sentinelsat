@@ -460,3 +460,44 @@ def test_download_invalid_id_cli(run_cli, tmpdir):
     assert result.exit_code != 0
     assert 'No product with' in result.output
     tmpdir.remove()
+
+@pytest.mark.vcr
+@pytest.mark.scihub
+def test_download_band(run_cli, api, tmpdir, smallest_online_products):
+    product_id = '83d39fde-6615-46ab-aa33-6a33e7b7f0d5'
+
+    # single band
+    band = 'B04'
+    command = [
+        '--uuid', product_id,
+        '--download',
+        '--band', band,
+        '--path', str(tmpdir)
+    ]
+    result = run_cli(*command)
+    assert result.exit_code == 0
+
+    # multi band
+    bands = ['B03', 'B05']
+    command = [
+        '--uuid', product_id,
+        '--download',
+        '--band', ','.join(bands),
+        '--path', str(tmpdir)
+    ]
+    result = run_cli(*command)
+    assert result.exit_code == 0
+
+
+    # multi band
+    wrongBand = 'B00'
+    command = [
+        '--uuid', product_id,
+        '--download',
+        '--band', wrongBand,
+        '--path', str(tmpdir)
+    ]
+    result = run_cli(*command)
+    assert result.exit_code != 0
+
+    tmpdir.remove()

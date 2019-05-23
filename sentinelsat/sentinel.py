@@ -10,7 +10,7 @@ import xml.etree.ElementTree as ET
 from collections import OrderedDict, defaultdict
 from contextlib import closing
 from datetime import date, datetime, timedelta
-from os import remove
+from os import remove, mkdir
 from os.path import basename, exists, getsize, join, splitext
 
 import geojson
@@ -428,6 +428,49 @@ class SentinelAPI:
         values = _parse_odata_response(response.json()['d'])
         return values
 
+    def get_product_manifest(self, id, product_name):
+        """Access manifest file for product.
+
+        Returns an array of dict for each file containing id, mimeType, size, href, md5sum
+        extracted from <dataObjectSection> of xml file.
+
+        Parameters
+        ----------
+        id : string
+            The UUID of the product to query
+        product_name : string
+            The name of product
+
+        Returns
+        -------
+        [dict[str, Any]]
+            An array of dictionaries for each file with an item for each metadata attribute
+
+        Notes
+        -----
+        Manifest is presented as an XML file here is an extract of dataObjectSection:
+        <xfdu:XFDU xmlns:xfdu="urn:ccsds:schema:xfdu:1" xmlns:gml="http://www.opengis.net/gml" xmlns:safe="http://www.esa.int/safe/sentinel/1.1" version="esa/safe/sentinel/1.1/sentinel-2/msi/archive_l1c_user_product">
+            ...
+            <dataObjectSection>
+                <dataObject ID="S2_Level-1C_Product_Metadata">
+                    <byteStream mimeType="text/xml" size="44191">
+                        <fileLocation locatorType="URL" href="./MTD_MSIL1C.xml" />
+                        <checksum checksumName="MD5">fa7937f8b6bb880d6617cc991de5e065</checksum>
+                    </byteStream>
+                </dataObject>
+                ...
+            </dataObjectSection>
+        </xfdu:XFDU>
+      """
+        url = urljoin(self.api_url,
+            u"odata/v1/Products('{}')/Nodes('{}.SAFE')/Nodes('manifest.safe')/$value"
+            .format(id, product_name))
+        response = self.session.get(url, auth=self.session.auth,
+                                    timeout=self.timeout)
+        _check_scihub_response(response, test_json=False)
+        values = _parse_manifest_xml(response.content)
+        return values
+
     def _trigger_offline_retrieval(self, url):
         """ Triggers retrieval of an offline product
 
@@ -460,7 +503,7 @@ class SentinelAPI:
                 raise SentinelAPILTAError('Trying to download an offline product', r)
             return r.status_code
 
-    def download(self, id, directory_path='.', checksum=True):
+    def download(self, id, directory_path='.', checksum=True, band_list=None):
         """Download a product.
 
         Uses the filename on the server for the downloaded file, e.g.
@@ -472,6 +515,8 @@ class SentinelAPI:
         ----------
         id : string
             UUID of the product, e.g. 'a8dd0cfd-613e-45ce-868c-d79177b916ed'
+        band_list : list
+            List of Sentinel 2 band in [B0, B1, ... B12, B8A, TCI]
         directory_path : string, optional
             Where the file will be downloaded
         checksum : bool, optional
@@ -495,11 +540,7 @@ class SentinelAPI:
         product_info['path'] = path
         product_info['downloaded_bytes'] = 0
 
-        self.logger.info('Downloading %s to %s', id, path)
 
-        if exists(path):
-            # We assume that the product has been downloaded and is complete
-            return product_info
 
         # An incomplete download triggers the retrieval from the LTA if the product is not online
         if not product_info['Online']:
@@ -509,49 +550,51 @@ class SentinelAPI:
             self._trigger_offline_retrieval(product_info['url'])
             return product_info
 
-        # Use a temporary file for downloading
-        temp_path = path + '.incomplete'
 
-        skip_download = False
-        if exists(temp_path):
-            if getsize(temp_path) > product_info['size']:
-                self.logger.warning(
-                    "Existing incomplete file %s is larger than the expected final size"
-                    " (%s vs %s bytes). Deleting it.",
-                    str(temp_path), getsize(temp_path), product_info['size'])
-                remove(temp_path)
-            elif getsize(temp_path) == product_info['size']:
-                if self._md5_compare(temp_path, product_info['md5']):
-                    skip_download = True
-                else:
-                    # Log a warning since this should never happen
-                    self.logger.warning(
-                        "Existing incomplete file %s appears to be fully downloaded but "
-                        "its checksum is incorrect. Deleting it.",
-                        str(temp_path))
-                    remove(temp_path)
+        if band_list:
+            if str.startswith(product_info['title'], 'S2'):
+                band_dict = {
+                    'B01': 'IMG_DATA_Band_60m_1_Tile1_Data',
+                    'B02': 'IMG_DATA_Band_10m_1_Tile1_Data',
+                    'B03': 'IMG_DATA_Band_10m_2_Tile1_Data',
+                    'B04': 'IMG_DATA_Band_10m_3_Tile1_Data',
+                    'B05': 'IMG_DATA_Band_20m_1_Tile1_Data',
+                    'B06': 'IMG_DATA_Band_20m_2_Tile1_Data',
+                    'B07': 'IMG_DATA_Band_20m_3_Tile1_Data',
+                    'B08': 'IMG_DATA_Band_10m_4_Tile1_Data',
+                    'B09': 'IMG_DATA_Band_60m_2_Tile1_Data',
+                    'B10': 'IMG_DATA_Band_60m_3_Tile1_Data',
+                    'B11': 'IMG_DATA_Band_20m_5_Tile1_Data',
+                    'B12': 'IMG_DATA_Band_20m_6_Tile1_Data',
+                    'B8A': 'IMG_DATA_Band_20m_4_Tile1_Data',
+                    'TCI': 'IMG_DATA_Band_TCI_Tile1_Data'
+                }
+                manifest = self.get_product_manifest(id, product_info['title'])
+                files_info = []
+                for band in band_list:
+                    if band not in band_dict:
+                        self.logger.error('Band %s does not exists in Sentinel-2 product.', band)
+                    band_id = band_dict[band]
+                    file_info = [file_info for file_info in manifest if file_info['id'] == band_id][0]
+                    file_info['url'] = '/'.join(product_info['url'].split('/')[:-1]) + f"/Nodes('{product_info['title']}.SAFE')/"
+                    file_info['url'] += '/'.join([f"Nodes('{token}')" for token in file_info['href'].split('/')[1:]]) + '/$value'
+
+                    if not exists(join(directory_path, product_info['title'])):
+                        mkdir(join(directory_path, product_info['title']))
+                    path = join(directory_path, product_info['title'], file_info['href'].split('/')[-1])
+
+                    self.logger.info('Downloading band %s of %s to %s', band_id, id, path)
+                    file_info = self._download_file_with_resume(file_info, path)
+                    files_info.append(file_info)
+                product_info['bands'] = files_info
+                return product_info
             else:
-                # continue downloading
-                self.logger.info(
-                    "Download will resume from existing incomplete file %s.", temp_path)
-                pass
+                self.logger.error('band_list argument (%s) only compatible with Sentinel-2 product.', band_list)
+        else:
+            self.logger.info('Downloading %s to %s', id, path)
+            return self._download_file_with_resume(product_info, path, checksum=checksum)
 
-        if not skip_download:
-            # Store the number of downloaded bytes for unit tests
-            product_info['downloaded_bytes'] = self._download(
-                product_info['url'], temp_path, self.session, product_info['size'])
-
-        # Check integrity with MD5 checksum
-        if checksum is True:
-            if not self._md5_compare(temp_path, product_info['md5']):
-                remove(temp_path)
-                raise InvalidChecksumError('File corrupt: checksums do not match')
-
-        # Download successful, rename the temporary file to its proper name
-        shutil.move(temp_path, path)
-        return product_info
-
-    def download_all(self, products, directory_path='.', max_attempts=10, checksum=True):
+    def download_all(self, products, directory_path='.', max_attempts=10, checksum=True, band_list=None):
         """Download a list of products.
 
         Takes a list of product IDs as input. This means that the return value of query() can be
@@ -568,6 +611,8 @@ class SentinelAPI:
         ----------
         products : list
             List of product IDs
+        band_list : list
+            List of Sentinel 2 band in [B0, B1, ... B12, B8A, TCI]
         directory_path : string
             Directory where the downloaded files will be downloaded
         max_attempts : int, optional
@@ -599,7 +644,7 @@ class SentinelAPI:
         for i, product_id in enumerate(products):
             for attempt_num in range(max_attempts):
                 try:
-                    product_info = self.download(product_id, directory_path, checksum)
+                    product_info = self.download(product_id, directory_path, checksum, band_list=band_list)
                     return_values[product_id] = product_info
                     break
                 except (KeyboardInterrupt, SystemExit):
@@ -621,6 +666,7 @@ class SentinelAPI:
         # split up sucessfully processed products into downloaded and only triggered retrieval from the LTA
         triggered = OrderedDict([(k, v) for k, v in return_values.items() if v['Online'] is False])
         downloaded = OrderedDict([(k, v) for k, v in return_values.items() if v['Online'] is True])
+
 
         if len(failed) == len(product_ids) and last_exception is not None:
             raise last_exception
@@ -805,6 +851,56 @@ class SentinelAPI:
                     md5.update(block_data)
                     progress.update(len(block_data))
             return md5.hexdigest().lower() == checksum.lower()
+
+    def _download_file_with_resume(self, file_info, path, checksum=False):
+
+        if exists(path):
+            # We assume that the product has been downloaded and is complete
+            return file_info
+
+        # Use a temporary file for downloading
+        temp_path = path + '.incomplete'
+
+        skip_download = False
+        if exists(temp_path):
+            if getsize(temp_path) > file_info['size']:
+                self.logger.warning(
+                    "Existing incomplete file %s is larger than the expected final size"
+                    " (%s vs %s bytes). Deleting it.",
+                    str(temp_path), getsize(temp_path), file_info['size'])
+                remove(temp_path)
+            elif getsize(temp_path) == file_info['size']:
+                if self._md5_compare(temp_path, file_info['md5']):
+                    skip_download = True
+                else:
+                    # Log a warning since this should never happen
+                    self.logger.warning(
+                        "Existing incomplete file %s appears to be fully downloaded but "
+                        "its checksum is incorrect. Deleting it.",
+                        str(temp_path))
+                    remove(temp_path)
+            else:
+                # continue downloading
+                self.logger.info(
+                    "Download will resume from existing incomplete file %s.", temp_path)
+                pass
+
+        if not skip_download:
+            # Store the number of downloaded bytes for unit tests
+            file_info['downloaded_bytes'] = self._download(
+                file_info['url'], temp_path, self.session, file_info['size'])
+
+        # Check integrity with MD5 checksum
+        if checksum is True:
+            if not self._md5_compare(temp_path, file_info['md5']):
+                remove(temp_path)
+                raise InvalidChecksumError('File corrupt: checksums do not match')
+
+        # Download successful, rename the temporary file to its proper name
+        shutil.move(temp_path, path)
+
+        return file_info
+
 
     def _download(self, url, path, session, file_size):
         headers = {}
@@ -1141,3 +1237,18 @@ def _parse_odata_response(product):
                 pass
         output[attr['Name']] = value
     return output
+
+def _parse_manifest_xml(xml):
+    outputs = []
+    root = ET.fromstring(xml)
+    for item in root.findall("./dataObjectSection/dataObject"):
+        output = {
+            'id': item.get('ID'),
+            'mimetype': item.find('./byteStream').get('mimeType'),
+            'size': int(item.find('./byteStream').get('size')),
+            'href': item.find('./byteStream/fileLocation').get('href'),
+            'md5sum': item.find('./byteStream/checksum').text
+        }
+        outputs.append(output)
+
+    return outputs

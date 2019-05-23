@@ -80,6 +80,9 @@ class CommaSeparatedString(click.ParamType):
     '--download', '-d', is_flag=True,
     help='Download all results of the query.')
 @click.option(
+    '--band', '-b', type=CommaSeparatedString(), default=None,
+    help='Download Sentinel-2 specific band(s) in list [B01, ..., B12, B8A, TCI]. Multiple bands can be separated by comma. (requires --sentinel to be 2)')
+@click.option(
     '--path', type=click.Path(exists=True), default='.',
     help='Set the path where the files will be saved.')
 @click.option(
@@ -93,9 +96,9 @@ class CommaSeparatedString(click.ParamType):
     and metadata of the returned products.
     """)
 @click.version_option(version=sentinelsat_version, prog_name="sentinelsat")
-def cli(user, password, geometry, start, end, uuid, name, download, sentinel, producttype,
+def cli(user, password, geometry, start, end, uuid, name, download, band, sentinel, producttype,
         instrument, cloud, footprints, path, query, url, order_by, limit):
-    """Search for Sentinel products and, optionally, download all the results
+    """Search for Sentinel products and, optionally, download all the results (full product or specific band(s) for Sentinel-2)
     and/or create a geojson file with the search result footprints.
     Beyond your Copernicus Open Access Hub user and password, you must pass a geojson file
     containing the geometry of the area you want to search for or the UUIDs of the products. If you
@@ -165,7 +168,11 @@ def cli(user, password, geometry, start, end, uuid, name, download, sentinel, pr
             outfile.write(gj.dumps(footprints_geojson))
 
     if download is True:
-        product_infos, triggered, failed_downloads = api.download_all(products, path)
+        if band is not None:
+            band_list = [x.strip() for x in band]
+            product_infos, triggered, failed_downloads = api.download_all(products, path, band_list=band_list)
+        else:
+            product_infos, triggered, failed_downloads = api.download_all(products, path)
         if len(failed_downloads) > 0:
             with open(os.path.join(path, "corrupt_scenes.txt"), "w") as outfile:
                 for failed_id in failed_downloads:

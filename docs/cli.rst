@@ -133,6 +133,9 @@ Options:
 +----+---------------+------+--------------------------------------------------------------------------------------------+
 |    | -\-path       | PATH | Set the path where the files will be saved.                                                |
 +----+---------------+------+--------------------------------------------------------------------------------------------+
+| -b | -\-band       | TEXT | Download Sentinel-2 specific band(s) in list [B01, ..., B12, B8A, TCI].                    |
+|    |               |      | Multiple bands can be separated by comma. (requires :option:`--sentinel` to be 2).         |
++----+---------------+------+--------------------------------------------------------------------------------------------+
 | -q | -\-query      | TEXT | Extra search keywords you want to use in the query. Separate keywords with comma.          |
 |    |               |      | Example: 'producttype=GRD,polarisationmode=HH'.                                            |
 +----+---------------+------+--------------------------------------------------------------------------------------------+
