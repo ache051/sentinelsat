@@ -22,6 +22,9 @@ from six.moves.urllib.parse import urljoin, quote_plus
 from tqdm import tqdm
 
 from . import __version__ as sentinelsat_version
+from .product import Product
+from .error import SentinelAPIError, SentinelAPILTAError
+from .utils import _parse_iso_date, _parse_odata_response, _parse_opensearch_response, _format_query
 
 
 class SentinelAPI:
@@ -139,79 +142,87 @@ class SentinelAPI:
             Products returned by the query as a dictionary with the product ID as the key and
             the product's attributes (a dictionary) as the value.
         """
-        query = self.format_query(area, date, raw, area_relation, **keywords)
+        query = _format_query(area, date, raw, area_relation, **keywords)
 
         self.logger.debug("Running query: order_by=%s, limit=%s, offset=%s, query=%s",
                           order_by, limit, offset, query)
         formatted_order_by = _format_order_by(order_by)
         response, count = self._load_query(query, formatted_order_by, limit, offset)
         self.logger.info("Found %s products", count)
-        return _parse_opensearch_response(response)
 
-    @staticmethod
-    def format_query(area=None, date=None, raw=None, area_relation='Intersects',
-                     **keywords):
-        """Create a OpenSearch API query string.
-        """
-        if area_relation.lower() not in {"intersects", "contains", "iswithin"}:
-            raise ValueError("Incorrect AOI relation provided ({})".format(area_relation))
+        opensearch_dicts = _parse_opensearch_response(response)
 
-        # Check for duplicate keywords
-        kw_lower = set(x.lower() for x in keywords)
-        if (len(kw_lower) != len(keywords) or
-                (date is not None and 'beginposition' in kw_lower) or
-                (area is not None and 'footprint' in kw_lower)):
-            raise ValueError("Query contains duplicate keywords. Note that query keywords are case-insensitive.")
+        products = []
+        for id in opensearch_dicts:
+            products.append(Product(id, self.session, self.api_url, opensearch=opensearch_dicts[id]))
 
-        query_parts = []
+        return products
 
-        if date is not None:
-            keywords['beginPosition'] = date
 
-        for attr, value in sorted(keywords.items()):
-            # Escape spaces, where appropriate
-            if isinstance(value, string_types):
-                value = value.strip()
-                if not any(value.startswith(s[0]) and value.endswith(s[1]) for s in ['[]', '{}', '//', '()']):
-                    value = re.sub(r'\s', r'\ ', value, re.M)
+    # @staticmethod
+    # def format_query(area=None, date=None, raw=None, area_relation='Intersects',
+    #                  **keywords):
+    #     """Create a OpenSearch API query string.
+    #     """
+    #     if area_relation.lower() not in {"intersects", "contains", "iswithin"}:
+    #         raise ValueError("Incorrect AOI relation provided ({})".format(area_relation))
 
-            # Handle date keywords
-            # Keywords from https://github.com/SentinelDataHub/DataHubSystem/search?q=text/date+iso8601
-            date_attrs = ['beginposition', 'endposition', 'date', 'creationdate', 'ingestiondate']
-            if attr.lower() in date_attrs:
-                # Automatically format date-type attributes
-                if isinstance(value, string_types) and ' TO ' in value:
-                    # This is a string already formatted as a date interval,
-                    # e.g. '[NOW-1DAY TO NOW]'
-                    pass
-                elif not isinstance(value, string_types) and len(value) == 2:
-                    value = (format_query_date(value[0]), format_query_date(value[1]))
-                else:
-                    raise ValueError("Date-type query parameter '{}' expects a two-element tuple "
-                                     "of str or datetime objects. Received {}".format(attr, value))
+    #     # Check for duplicate keywords
+    #     kw_lower = set(x.lower() for x in keywords)
+    #     if (len(kw_lower) != len(keywords) or
+    #             (date is not None and 'beginposition' in kw_lower) or
+    #             (area is not None and 'footprint' in kw_lower)):
+    #         raise ValueError("Query contains duplicate keywords. Note that query keywords are case-insensitive.")
 
-            # Handle ranged values
-            if isinstance(value, (list, tuple)):
-                # Handle value ranges
-                if len(value) == 2:
-                    # Allow None to be used as a unlimited bound
-                    value = ['*' if x is None else x for x in value]
-                    if all(x == '*' for x in value):
-                        continue
-                    value = '[{} TO {}]'.format(*value)
-                else:
-                    raise ValueError("Invalid number of elements in list. Expected 2, received "
-                                     "{}".format(len(value)))
+    #     query_parts = []
 
-            query_parts.append('{}:{}'.format(attr, value))
+    #     if date is not None:
+    #         keywords['beginPosition'] = date
 
-        if raw:
-            query_parts.append(raw)
+    #     for attr, value in sorted(keywords.items()):
+    #         # Escape spaces, where appropriate
+    #         if isinstance(value, string_types):
+    #             value = value.strip()
+    #             if not any(value.startswith(s[0]) and value.endswith(s[1]) for s in ['[]', '{}', '//', '()']):
+    #                 value = re.sub(r'\s', r'\ ', value, re.M)
 
-        if area is not None:
-            query_parts.append('footprint:"{}({})"'.format(area_relation, area))
+    #         # Handle date keywords
+    #         # Keywords from https://github.com/SentinelDataHub/DataHubSystem/search?q=text/date+iso8601
+    #         date_attrs = ['beginposition', 'endposition', 'date', 'creationdate', 'ingestiondate']
+    #         if attr.lower() in date_attrs:
+    #             # Automatically format date-type attributes
+    #             if isinstance(value, string_types) and ' TO ' in value:
+    #                 # This is a string already formatted as a date interval,
+    #                 # e.g. '[NOW-1DAY TO NOW]'
+    #                 pass
+    #             elif not isinstance(value, string_types) and len(value) == 2:
+    #                 value = (format_query_date(value[0]), format_query_date(value[1]))
+    #             else:
+    #                 raise ValueError("Date-type query parameter '{}' expects a two-element tuple "
+    #                                  "of str or datetime objects. Received {}".format(attr, value))
 
-        return ' '.join(query_parts)
+    #         # Handle ranged values
+    #         if isinstance(value, (list, tuple)):
+    #             # Handle value ranges
+    #             if len(value) == 2:
+    #                 # Allow None to be used as a unlimited bound
+    #                 value = ['*' if x is None else x for x in value]
+    #                 if all(x == '*' for x in value):
+    #                     continue
+    #                 value = '[{} TO {}]'.format(*value)
+    #             else:
+    #                 raise ValueError("Invalid number of elements in list. Expected 2, received "
+    #                                  "{}".format(len(value)))
+
+    #         query_parts.append('{}:{}'.format(attr, value))
+
+    #     if raw:
+    #         query_parts.append(raw)
+
+    #     if area is not None:
+    #         query_parts.append('footprint:"{}({})"'.format(area_relation, area))
+
+    #     return ' '.join(query_parts)
 
     def query_raw(self, query, order_by=None, limit=None, offset=0):
         """
@@ -264,7 +275,7 @@ class SentinelAPI:
             # but ignore them.
             if kw in keywords:
                 del keywords[kw]
-        query = self.format_query(area, date, raw, area_relation, **keywords)
+        query = _format_query(area, date, raw, area_relation, **keywords)
         _, total_count = self._load_query(query, limit=0)
         return total_count
 
@@ -390,86 +401,7 @@ class SentinelAPI:
         df.drop(['footprint', 'gmlfootprint'], axis=1, inplace=True)
         return gpd.GeoDataFrame(df, crs=crs, geometry=geometry)
 
-    def get_product_odata(self, id, full=False):
-        """Access OData API to get info about a product.
-
-        Returns a dict containing the id, title, size, md5sum, date, footprint and download url
-        of the product. The date field corresponds to the Start ContentDate value.
-
-        If `full` is set to True, then the full, detailed metadata of the product is returned
-        in addition to the above.
-
-        Parameters
-        ----------
-        id : string
-            The UUID of the product to query
-        full : bool
-            Whether to get the full metadata for the Product. False by default.
-
-        Returns
-        -------
-        dict[str, Any]
-            A dictionary with an item for each metadata attribute
-
-        Notes
-        -----
-        For a full list of mappings between the OpenSearch (Solr) and OData attribute names
-        see the following definition files:
-        https://github.com/SentinelDataHub/DataHubSystem/blob/master/addon/sentinel-1/src/main/resources/META-INF/sentinel-1.owl
-        https://github.com/SentinelDataHub/DataHubSystem/blob/master/addon/sentinel-2/src/main/resources/META-INF/sentinel-2.owl
-        https://github.com/SentinelDataHub/DataHubSystem/blob/master/addon/sentinel-3/src/main/resources/META-INF/sentinel-3.owl
-        """
-        url = urljoin(self.api_url, u"odata/v1/Products('{}')?$format=json".format(id))
-        if full:
-            url += '&$expand=Attributes'
-        response = self.session.get(url, auth=self.session.auth,
-                                    timeout=self.timeout)
-        _check_scihub_response(response)
-        values = _parse_odata_response(response.json()['d'])
-        return values
-
-    def get_product_manifest(self, id, product_name):
-        """Access manifest file for product.
-
-        Returns an array of dict for each file containing id, mimeType, size, href, md5sum
-        extracted from <dataObjectSection> of xml file.
-
-        Parameters
-        ----------
-        id : string
-            The UUID of the product to query
-        product_name : string
-            The name of product
-
-        Returns
-        -------
-        [dict[str, Any]]
-            An array of dictionaries for each file with an item for each metadata attribute
-
-        Notes
-        -----
-        Manifest is presented as an XML file here is an extract of dataObjectSection:
-        <xfdu:XFDU xmlns:xfdu="urn:ccsds:schema:xfdu:1" xmlns:gml="http://www.opengis.net/gml" xmlns:safe="http://www.esa.int/safe/sentinel/1.1" version="esa/safe/sentinel/1.1/sentinel-2/msi/archive_l1c_user_product">
-            ...
-            <dataObjectSection>
-                <dataObject ID="S2_Level-1C_Product_Metadata">
-                    <byteStream mimeType="text/xml" size="44191">
-                        <fileLocation locatorType="URL" href="./MTD_MSIL1C.xml" />
-                        <checksum checksumName="MD5">fa7937f8b6bb880d6617cc991de5e065</checksum>
-                    </byteStream>
-                </dataObject>
-                ...
-            </dataObjectSection>
-        </xfdu:XFDU>
-      """
-        url = urljoin(self.api_url,
-            u"odata/v1/Products('{}')/Nodes('{}.SAFE')/Nodes('manifest.safe')/$value"
-            .format(id, product_name))
-        response = self.session.get(url, auth=self.session.auth,
-                                    timeout=self.timeout)
-        _check_scihub_response(response, test_json=False)
-        values = _parse_manifest_xml(response.content)
-        return values
+    
 
     def _trigger_offline_retrieval(self, url):
         """ Triggers retrieval of an offline product
@@ -535,7 +467,8 @@ class SentinelAPI:
         InvalidChecksumError
             If the MD5 checksum does not match the checksum on the server.
         """
-        product_info = self.get_product_odata(id)
+        product = Product(id, self)
+        product_info = product.get_odata(id)
         path = join(directory_path, product_info['title'] + '.zip')
         product_info['path'] = path
         product_info['downloaded_bytes'] = 0
@@ -569,15 +502,15 @@ class SentinelAPI:
                     'B8A': 'IMG_DATA_Band_20m_4_Tile1_Data',
                     'TCI': 'IMG_DATA_Band_TCI_Tile1_Data'
                 }
-                manifest = self.get_product_manifest(id, product_info['title'])
+                manifest = product.get_manifest(product_info['title'])
                 files_info = []
                 for band in band_list:
                     if band not in band_dict:
                         self.logger.error('Band %s does not exists in Sentinel-2 product.', band)
                     band_id = band_dict[band]
                     file_info = [file_info for file_info in manifest if file_info['id'] == band_id][0]
-                    file_info['url'] = '/'.join(product_info['url'].split('/')[:-1]) + f"/Nodes('{product_info['title']}.SAFE')/"
-                    file_info['url'] += '/'.join([f"Nodes('{token}')" for token in file_info['href'].split('/')[1:]]) + '/$value'
+                    file_info['url'] = '/'.join(product_info['url'].split('/')[:-1]) + "/Nodes('{}.SAFE')/".format(product_info['title'])
+                    file_info['url'] += '/'.join(["Nodes('{}')".format(token) for token in file_info['href'].split('/')[1:]]) + '/$value'
 
                     if not exists(join(directory_path, product_info['title'])):
                         mkdir(join(directory_path, product_info['title']))
@@ -802,7 +735,8 @@ class SentinelAPI:
         # Product name -> list of matching odata dicts
         product_infos = defaultdict(list)
         for id in ids:
-            odata = self.get_product_odata(id)
+            product = Product(id, api)
+            odata = product.get_odata(id)
             name = odata['title']
             product_infos[name].append(odata)
 
@@ -931,48 +865,6 @@ class SentinelAPI:
         """tqdm progressbar wrapper. May be overridden to customize progressbar behavior"""
         kwargs.update({'disable': not self.show_progressbars})
         return tqdm(**kwargs)
-
-
-class SentinelAPIError(Exception):
-    """Invalid responses from DataHub.
-
-    Attributes
-    ----------
-    msg: str
-        The error message.
-    response: requests.Response
-        The response from the server as a `requests.Response` object.
-    """
-
-    def __init__(self, msg=None, response=None):
-        self.msg = msg
-        self.response = response
-
-    def __str__(self):
-        return 'HTTP status {0} {1}: {2}'.format(
-            self.response.status_code, self.response.reason,
-            ('\n' if '\n' in self.msg else '') + self.msg)
-
-class SentinelAPILTAError(SentinelAPIError):
-    """ Error when retrieving a product from the Long Term Archive
-
-    Attributes
-    ----------
-    msg: str
-        The error message.
-    response: requests.Response
-        The response from the server as a `requests.Response` object.
-    """
-
-    def __init__(self, msg=None, response=None):
-        self.msg = msg
-        self.response = response
-
-
-class InvalidChecksumError(Exception):
-    """MD5 checksum of a local file does not match the one from the server.
-    """
-    pass
 
 
 def read_geojson(geojson_file):
@@ -1140,115 +1032,3 @@ def _format_order_by(order_by):
         output.append(part + dir)
     return ",".join(output)
 
-
-def _parse_gml_footprint(geometry_str):
-    geometry_xml = ET.fromstring(geometry_str)
-    poly_coords_str = geometry_xml \
-        .find('{http://www.opengis.net/gml}outerBoundaryIs') \
-        .find('{http://www.opengis.net/gml}LinearRing') \
-        .findtext('{http://www.opengis.net/gml}coordinates')
-    poly_coords = (coord.split(",")[::-1] for coord in poly_coords_str.split(" "))
-    coord_string = ",".join(" ".join(coord) for coord in poly_coords)
-    return "POLYGON(({}))".format(coord_string)
-
-
-def _parse_iso_date(content):
-    if '.' in content:
-        return datetime.strptime(content, '%Y-%m-%dT%H:%M:%S.%fZ')
-    else:
-        return datetime.strptime(content, '%Y-%m-%dT%H:%M:%SZ')
-
-
-def _parse_odata_timestamp(in_date):
-    """Convert the timestamp received from OData JSON API to a datetime object.
-    """
-    timestamp = int(in_date.replace('/Date(', '').replace(')/', ''))
-    seconds = timestamp // 1000
-    ms = timestamp % 1000
-    return datetime.utcfromtimestamp(seconds) + timedelta(milliseconds=ms)
-
-
-def _parse_opensearch_response(products):
-    """Convert a query response to a dictionary.
-
-    The resulting dictionary structure is {<product id>: {<property>: <value>}}.
-    The property values are converted to their respective Python types unless `parse_values`
-    is set to `False`.
-    """
-
-    converters = {'date': _parse_iso_date, 'int': int, 'long': int, 'float': float, 'double': float}
-    # Keep the string type by default
-    default_converter = lambda x: x
-
-    output = OrderedDict()
-    for prod in products:
-        product_dict = {}
-        prod_id = prod['id']
-        output[prod_id] = product_dict
-        for key in prod:
-            if key == 'id':
-                continue
-            if isinstance(prod[key], string_types):
-                product_dict[key] = prod[key]
-            else:
-                properties = prod[key]
-                if isinstance(properties, dict):
-                    properties = [properties]
-                if key == 'link':
-                    for p in properties:
-                        name = 'link'
-                        if 'rel' in p:
-                            name = 'link_' + p['rel']
-                        product_dict[name] = p['href']
-                else:
-                    f = converters.get(key, default_converter)
-                    for p in properties:
-                        try:
-                            product_dict[p['name']] = f(p['content'])
-                        except KeyError:
-                            # Sentinel-3 has one element 'arr'
-                            # which violates the name:content convention
-                            product_dict[p['name']] = f(p['str'])
-    return output
-
-
-def _parse_odata_response(product):
-    output = {
-        'id': product['Id'],
-        'title': product['Name'],
-        'size': int(product['ContentLength']),
-        product['Checksum']['Algorithm'].lower(): product['Checksum']['Value'],
-        'date': _parse_odata_timestamp(product['ContentDate']['Start']),
-        'footprint': _parse_gml_footprint(product["ContentGeometry"]),
-        'url': product['__metadata']['media_src'],
-        'Online': product.get('Online', True),
-        'Creation Date': _parse_odata_timestamp(product['CreationDate']),
-        'Ingestion Date': _parse_odata_timestamp(product['IngestionDate']),
-    }
-    # Parse the extended metadata, if provided
-    converters = [int, float, _parse_iso_date]
-    for attr in product['Attributes'].get('results', []):
-        value = attr['Value']
-        for f in converters:
-            try:
-                value = f(attr['Value'])
-                break
-            except ValueError:
-                pass
-        output[attr['Name']] = value
-    return output
-
-def _parse_manifest_xml(xml):
-    outputs = []
-    root = ET.fromstring(xml)
-    for item in root.findall("./dataObjectSection/dataObject"):
-        output = {
-            'id': item.get('ID'),
-            'mimetype': item.find('./byteStream').get('mimeType'),
-            'size': int(item.find('./byteStream').get('size')),
-            'href': item.find('./byteStream/fileLocation').get('href'),
-            'md5sum': item.find('./byteStream/checksum').text
-        }
-        outputs.append(output)
-
-    return outputs
