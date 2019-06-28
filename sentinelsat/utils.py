@@ -316,3 +316,21 @@ def format_query_date(in_date):
         return datetime.strptime(in_date, '%Y%m%d').strftime('%Y-%m-%dT%H:%M:%SZ')
     except ValueError:
         raise ValueError('Unsupported date value {}'.format(in_date))
+
+
+def _format_order_by(order_by):
+    if not order_by or not order_by.strip():
+        return None
+    output = []
+    for part in order_by.split(','):
+        part = part.strip()
+        dir = " asc"
+        if part[0] == '+':
+            part = part[1:]
+        elif part[0] == '-':
+            dir = " desc"
+            part = part[1:]
+        if not part or not part.isalnum():
+            raise ValueError("Invalid order by value ({})".format(order_by))
+        output.append(part + dir)
+    return ",".join(output)

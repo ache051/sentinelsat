@@ -24,7 +24,7 @@ from tqdm import tqdm
 from . import __version__ as sentinelsat_version
 from .product import Product
 from .error import SentinelAPIError, SentinelAPILTAError
-from .utils import _parse_iso_date, _parse_odata_response, _parse_opensearch_response, _format_query
+from .utils import _parse_iso_date, _parse_odata_response, _parse_opensearch_response, _format_query, _format_order_by
 
 
 class SentinelAPI:
@@ -1013,22 +1013,4 @@ def _check_scihub_response(response, test_json=True):
         # See PEP 409
         api_error.__cause__ = None
         raise api_error
-
-
-def _format_order_by(order_by):
-    if not order_by or not order_by.strip():
-        return None
-    output = []
-    for part in order_by.split(','):
-        part = part.strip()
-        dir = " asc"
-        if part[0] == '+':
-            part = part[1:]
-        elif part[0] == '-':
-            dir = " desc"
-            part = part[1:]
-        if not part or not part.isalnum():
-            raise ValueError("Invalid order by value ({})".format(order_by))
-        output.append(part + dir)
-    return ",".join(output)
 

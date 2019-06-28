@@ -11,7 +11,7 @@ import requests_mock
 
 from sentinelsat import InvalidChecksumError, SentinelAPI, SentinelAPIError, SentinelAPILTAError, \
     format_query_date, geojson_to_wkt, read_geojson
-from sentinelsat.sentinel import _format_order_by, _parse_odata_timestamp, _parse_opensearch_response
+from sentinelsat.utils import _format_order_by, _parse_odata_timestamp, _parse_opensearch_response
 
 _small_query = dict(
     area='POLYGON((0 0,1 1,0 1,0 0))',
