@@ -1,15 +1,11 @@
 # -*- coding: utf-8 -*-
 from __future__ import absolute_import, division, print_function
 
-import hashlib
 import logging
 import re
-import shutil
 import warnings
-import xml.etree.ElementTree as ET
 from collections import OrderedDict, defaultdict
-from contextlib import closing
-from datetime import date, datetime, timedelta
+from datetime import date, datetime
 from os import remove, mkdir
 from os.path import basename, exists, getsize, join, splitext
 
@@ -23,7 +19,7 @@ from tqdm import tqdm
 
 from . import __version__ as sentinelsat_version
 from .product import Product
-from .error import SentinelAPIError, SentinelAPILTAError
+from .error import SentinelAPIError, SentinelAPILTAError, InvalidChecksumError
 from .utils import _parse_iso_date, _parse_odata_response, _parse_opensearch_response, _format_query, _format_order_by
 
 
@@ -154,75 +150,10 @@ class SentinelAPI:
 
         products = []
         for id in opensearch_dicts:
-            products.append(Product(id, self.session, self.api_url, opensearch=opensearch_dicts[id]))
+            products.append(Product(id, self.session, opensearch=opensearch_dicts[id], api_url=self.api_url, show_progressbars=self.show_progressbars))
 
         return products
 
-
-    # @staticmethod
-    # def format_query(area=None, date=None, raw=None, area_relation='Intersects',
-    #                  **keywords):
-    #     """Create a OpenSearch API query string.
-    #     """
-    #     if area_relation.lower() not in {"intersects", "contains", "iswithin"}:
-    #         raise ValueError("Incorrect AOI relation provided ({})".format(area_relation))
-
-    #     # Check for duplicate keywords
-    #     kw_lower = set(x.lower() for x in keywords)
-    #     if (len(kw_lower) != len(keywords) or
-    #             (date is not None and 'beginposition' in kw_lower) or
-    #             (area is not None and 'footprint' in kw_lower)):
-    #         raise ValueError("Query contains duplicate keywords. Note that query keywords are case-insensitive.")
-
-    #     query_parts = []
-
-    #     if date is not None:
-    #         keywords['beginPosition'] = date
-
-    #     for attr, value in sorted(keywords.items()):
-    #         # Escape spaces, where appropriate
-    #         if isinstance(value, string_types):
-    #             value = value.strip()
-    #             if not any(value.startswith(s[0]) and value.endswith(s[1]) for s in ['[]', '{}', '//', '()']):
-    #                 value = re.sub(r'\s', r'\ ', value, re.M)
-
-    #         # Handle date keywords
-    #         # Keywords from https://github.com/SentinelDataHub/DataHubSystem/search?q=text/date+iso8601
-    #         date_attrs = ['beginposition', 'endposition', 'date', 'creationdate', 'ingestiondate']
-    #         if attr.lower() in date_attrs:
-    #             # Automatically format date-type attributes
-    #             if isinstance(value, string_types) and ' TO ' in value:
-    #                 # This is a string already formatted as a date interval,
-    #                 # e.g. '[NOW-1DAY TO NOW]'
-    #                 pass
-    #             elif not isinstance(value, string_types) and len(value) == 2:
-    #                 value = (format_query_date(value[0]), format_query_date(value[1]))
-    #             else:
-    #                 raise ValueError("Date-type query parameter '{}' expects a two-element tuple "
-    #                                  "of str or datetime objects. Received {}".format(attr, value))
-
-    #         # Handle ranged values
-    #         if isinstance(value, (list, tuple)):
-    #             # Handle value ranges
-    #             if len(value) == 2:
-    #                 # Allow None to be used as a unlimited bound
-    #                 value = ['*' if x is None else x for x in value]
-    #                 if all(x == '*' for x in value):
-    #                     continue
-    #                 value = '[{} TO {}]'.format(*value)
-    #             else:
-    #                 raise ValueError("Invalid number of elements in list. Expected 2, received "
-    #                                  "{}".format(len(value)))
-
-    #         query_parts.append('{}:{}'.format(attr, value))
-
-    #     if raw:
-    #         query_parts.append(raw)
-
-    #     if area is not None:
-    #         query_parts.append('footprint:"{}({})"'.format(area_relation, area))
-
-    #     return ' '.join(query_parts)
 
     def query_raw(self, query, order_by=None, limit=None, offset=0):
         """
@@ -403,130 +334,6 @@ class SentinelAPI:
 
     
 
-    def _trigger_offline_retrieval(self, url):
-        """ Triggers retrieval of an offline product
-
-        Trying to download an offline product triggers its retrieval from the long term archive.
-        The returned HTTP status code conveys whether this was successful.
-
-        Parameters
-        ----------
-        url : string
-            URL for downloading the product
-
-        Notes
-        -----
-        https://scihub.copernicus.eu/userguide/LongTermArchive
-
-        """
-        with self.session.get(url, auth=self.session.auth, timeout=self.timeout) as r:
-            # check https://scihub.copernicus.eu/userguide/LongTermArchive#HTTP_Status_codes
-            if r.status_code == 202:
-                self.logger.info("Accepted for retrieval")
-            elif r.status_code == 503:
-                self.logger.error("Request not accepted")
-                raise SentinelAPILTAError('Request for retrieval from LTA not accepted', r)
-            elif r.status_code == 403:
-                self.logger.error("Requests exceed user quota")
-                raise SentinelAPILTAError('Requests for retrieval from LTA exceed user quota', r)
-            elif r.status_code == 500:
-                # should not happen
-                self.logger.error("Trying to download an offline product")
-                raise SentinelAPILTAError('Trying to download an offline product', r)
-            return r.status_code
-
-    def download(self, id, directory_path='.', checksum=True, band_list=None):
-        """Download a product.
-
-        Uses the filename on the server for the downloaded file, e.g.
-        "S1A_EW_GRDH_1SDH_20141003T003840_20141003T003920_002658_002F54_4DD1.zip".
-
-        Incomplete downloads are continued and complete files are skipped.
-
-        Parameters
-        ----------
-        id : string
-            UUID of the product, e.g. 'a8dd0cfd-613e-45ce-868c-d79177b916ed'
-        band_list : list
-            List of Sentinel 2 band in [B0, B1, ... B12, B8A, TCI]
-        directory_path : string, optional
-            Where the file will be downloaded
-        checksum : bool, optional
-            If True, verify the downloaded file's integrity by checking its MD5 checksum.
-            Throws InvalidChecksumError if the checksum does not match.
-            Defaults to True.
-
-        Returns
-        -------
-        product_info : dict
-            Dictionary containing the product's info from get_product_info() as well as
-            the path on disk.
-
-        Raises
-        ------
-        InvalidChecksumError
-            If the MD5 checksum does not match the checksum on the server.
-        """
-        product = Product(id, self)
-        product_info = product.get_odata(id)
-        path = join(directory_path, product_info['title'] + '.zip')
-        product_info['path'] = path
-        product_info['downloaded_bytes'] = 0
-
-
-
-        # An incomplete download triggers the retrieval from the LTA if the product is not online
-        if not product_info['Online']:
-            self.logger.warning(
-                'Product %s is not online. Triggering retrieval from long term archive.',
-                product_info['id'])
-            self._trigger_offline_retrieval(product_info['url'])
-            return product_info
-
-
-        if band_list:
-            if str.startswith(product_info['title'], 'S2'):
-                band_dict = {
-                    'B01': 'IMG_DATA_Band_60m_1_Tile1_Data',
-                    'B02': 'IMG_DATA_Band_10m_1_Tile1_Data',
-                    'B03': 'IMG_DATA_Band_10m_2_Tile1_Data',
-                    'B04': 'IMG_DATA_Band_10m_3_Tile1_Data',
-                    'B05': 'IMG_DATA_Band_20m_1_Tile1_Data',
-                    'B06': 'IMG_DATA_Band_20m_2_Tile1_Data',
-                    'B07': 'IMG_DATA_Band_20m_3_Tile1_Data',
-                    'B08': 'IMG_DATA_Band_10m_4_Tile1_Data',
-                    'B09': 'IMG_DATA_Band_60m_2_Tile1_Data',
-                    'B10': 'IMG_DATA_Band_60m_3_Tile1_Data',
-                    'B11': 'IMG_DATA_Band_20m_5_Tile1_Data',
-                    'B12': 'IMG_DATA_Band_20m_6_Tile1_Data',
-                    'B8A': 'IMG_DATA_Band_20m_4_Tile1_Data',
-                    'TCI': 'IMG_DATA_Band_TCI_Tile1_Data'
-                }
-                manifest = product.get_manifest(product_info['title'])
-                files_info = []
-                for band in band_list:
-                    if band not in band_dict:
-                        self.logger.error('Band %s does not exists in Sentinel-2 product.', band)
-                    band_id = band_dict[band]
-                    file_info = [file_info for file_info in manifest if file_info['id'] == band_id][0]
-                    file_info['url'] = '/'.join(product_info['url'].split('/')[:-1]) + "/Nodes('{}.SAFE')/".format(product_info['title'])
-                    file_info['url'] += '/'.join(["Nodes('{}')".format(token) for token in file_info['href'].split('/')[1:]]) + '/$value'
-
-                    if not exists(join(directory_path, product_info['title'])):
-                        mkdir(join(directory_path, product_info['title']))
-                    path = join(directory_path, product_info['title'], file_info['href'].split('/')[-1])
-
-                    self.logger.info('Downloading band %s of %s to %s', band_id, id, path)
-                    file_info = self._download_file_with_resume(file_info, path)
-                    files_info.append(file_info)
-                product_info['bands'] = files_info
-                return product_info
-            else:
-                self.logger.error('band_list argument (%s) only compatible with Sentinel-2 product.', band_list)
-        else:
-            self.logger.info('Downloading %s to %s', id, path)
-            return self._download_file_with_resume(product_info, path, checksum=checksum)
-
     def download_all(self, products, directory_path='.', max_attempts=10, checksum=True, band_list=None):
         """Download a list of products.
 
@@ -570,14 +377,15 @@ class SentinelAPI:
         set[string]
             The list of products that failed to download.
         """
-        product_ids = list(products)
+        product_ids = [product.id for product in products]
         self.logger.info("Will download %d products", len(product_ids))
         return_values = OrderedDict()
         last_exception = None
-        for i, product_id in enumerate(products):
+        for i, product in enumerate(products):
+            product_id = product.id
             for attempt_num in range(max_attempts):
                 try:
-                    product_info = self.download(product_id, directory_path, checksum, band_list=band_list)
+                    product_info = product.download(directory_path, checksum, band_list=band_list)
                     return_values[product_id] = product_info
                     break
                 except (KeyboardInterrupt, SystemExit):
@@ -735,7 +543,7 @@ class SentinelAPI:
         # Product name -> list of matching odata dicts
         product_infos = defaultdict(list)
         for id in ids:
-            product = Product(id, api)
+            product = Product(id, self.session)
             odata = product.get_odata(id)
             name = odata['title']
             product_infos[name].append(odata)
@@ -761,7 +569,7 @@ class SentinelAPI:
             is_fine = False
             for product_info in product_infos[name]:
                 if (getsize(path) == product_info['size'] and
-                        self._md5_compare(path, product_info['md5'])):
+                        product._md5_compare(path, product_info['md5'])):
                     is_fine = True
                     break
             if not is_fine:
@@ -772,99 +580,6 @@ class SentinelAPI:
 
         return corrupt
 
-    def _md5_compare(self, file_path, checksum, block_size=2 ** 13):
-        """Compare a given MD5 checksum with one calculated from a file."""
-        with closing(self._tqdm(desc="MD5 checksumming", total=getsize(file_path), unit="B",
-                                unit_scale=True)) as progress:
-            md5 = hashlib.md5()
-            with open(file_path, "rb") as f:
-                while True:
-                    block_data = f.read(block_size)
-                    if not block_data:
-                        break
-                    md5.update(block_data)
-                    progress.update(len(block_data))
-            return md5.hexdigest().lower() == checksum.lower()
-
-    def _download_file_with_resume(self, file_info, path, checksum=False):
-
-        if exists(path):
-            # We assume that the product has been downloaded and is complete
-            return file_info
-
-        # Use a temporary file for downloading
-        temp_path = path + '.incomplete'
-
-        skip_download = False
-        if exists(temp_path):
-            if getsize(temp_path) > file_info['size']:
-                self.logger.warning(
-                    "Existing incomplete file %s is larger than the expected final size"
-                    " (%s vs %s bytes). Deleting it.",
-                    str(temp_path), getsize(temp_path), file_info['size'])
-                remove(temp_path)
-            elif getsize(temp_path) == file_info['size']:
-                if self._md5_compare(temp_path, file_info['md5']):
-                    skip_download = True
-                else:
-                    # Log a warning since this should never happen
-                    self.logger.warning(
-                        "Existing incomplete file %s appears to be fully downloaded but "
-                        "its checksum is incorrect. Deleting it.",
-                        str(temp_path))
-                    remove(temp_path)
-            else:
-                # continue downloading
-                self.logger.info(
-                    "Download will resume from existing incomplete file %s.", temp_path)
-                pass
-
-        if not skip_download:
-            # Store the number of downloaded bytes for unit tests
-            file_info['downloaded_bytes'] = self._download(
-                file_info['url'], temp_path, self.session, file_info['size'])
-
-        # Check integrity with MD5 checksum
-        if checksum is True:
-            if not self._md5_compare(temp_path, file_info['md5']):
-                remove(temp_path)
-                raise InvalidChecksumError('File corrupt: checksums do not match')
-
-        # Download successful, rename the temporary file to its proper name
-        shutil.move(temp_path, path)
-
-        return file_info
-
-
-    def _download(self, url, path, session, file_size):
-        headers = {}
-        continuing = exists(path)
-        if continuing:
-            already_downloaded_bytes = getsize(path)
-            headers = {'Range': 'bytes={}-'.format(already_downloaded_bytes)}
-        else:
-            already_downloaded_bytes = 0
-        downloaded_bytes = 0
-        with closing(session.get(url, stream=True, auth=session.auth,
-                                 headers=headers, timeout=self.timeout)) as r, \
-                closing(self._tqdm(desc="Downloading", total=file_size, unit="B",
-                                   unit_scale=True, initial=already_downloaded_bytes)) as progress:
-            _check_scihub_response(r, test_json=False)
-            chunk_size = 2 ** 20  # download in 1 MB chunks
-            mode = 'ab' if continuing else 'wb'
-            with open(path, mode) as f:
-                for chunk in r.iter_content(chunk_size=chunk_size):
-                    if chunk:  # filter out keep-alive new chunks
-                        f.write(chunk)
-                        progress.update(len(chunk))
-                        downloaded_bytes += len(chunk)
-            # Return the number of bytes downloaded
-            return downloaded_bytes
-
-    def _tqdm(self, **kwargs):
-        """tqdm progressbar wrapper. May be overridden to customize progressbar behavior"""
-        kwargs.update({'disable': not self.show_progressbars})
-        return tqdm(**kwargs)
 
 
 def read_geojson(geojson_file):
