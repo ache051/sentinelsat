@@ -58,7 +58,7 @@ class Product:
 
     logger = logging.getLogger('sentinelsat.product')
 
-    def __init__(self, id, session, opensearch=opensearch, api_url='https://scihub.copernicus.eu/apihub/', show_progressbars=True, timeout=None):
+    def __init__(self, id, session, opensearch={}, api_url='https://scihub.copernicus.eu/apihub/', show_progressbars=True, timeout=None):
         self.id = id
         if not isinstance(session, requests.Session):
             raise ValueError("Product must be created with a requests.Session object") 

@@ -284,9 +284,10 @@ class SentinelAPI:
         appropriate Python types.
         """
         feature_list = []
-        for i, (product_id, props) in enumerate(products.items()):
+        for i, product in enumerate(products):
+            props = product.opensearch
             props = props.copy()
-            props['id'] = product_id
+            props['id'] = product.id
             poly = geomet.wkt.loads(props['footprint'])
             del props['footprint']
             del props['gmlfootprint']
@@ -309,7 +310,10 @@ class SentinelAPI:
         except ImportError:
             raise ImportError("to_dataframe requires the optional dependency Pandas.")
 
-        return pd.DataFrame.from_dict(products, orient='index')
+        productsDict = OrderedDict()
+        for product in products:
+            productsDict[product.id] = product.opensearch
+        return pd.DataFrame.from_dict(productsDict, orient='index')
 
     @staticmethod
     def to_geodataframe(products):

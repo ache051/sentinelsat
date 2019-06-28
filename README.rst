@@ -74,13 +74,22 @@ Python Library
 .. code-block:: python
 
   from sentinelsat.sentinel import SentinelAPI, read_geojson, geojson_to_wkt
+  from sentinelsat.product import Product
   from datetime import date
 
   # connect to the API
   api = SentinelAPI('user', 'password', 'https://scihub.copernicus.eu/dhus')
 
   # download single scene by known product id
-  api.download(<product_id>)
+  product = Product(<product_id>, api.session)
+  product.download()
+
+  # Get basic information about the product: its title, file size, MD5 sum, date, footprint and
+  # its download url
+  product.get_odata()
+
+  # Get the product's full metadata available on the server
+  product.get_odata(full=True)
 
   # search by polygon, time, and Hub query keywords
   footprint = geojson_to_wkt(read_geojson('map.geojson'))
@@ -98,12 +107,6 @@ Python Library
   # GeoPandas GeoDataFrame with the metadata of the scenes and the footprints as geometries
   api.to_geodataframe(products)
 
-  # Get basic information about the product: its title, file size, MD5 sum, date, footprint and
-  # its download url
-  api.get_product_odata(<product_id>)
-
-  # Get the product's full metadata available on the server
-  api.get_product_odata(<product_id>, full=True)
 
 Valid search query keywords can be found at the `Copernicus Open Access Hub documentation
 <https://scihub.copernicus.eu/userguide/3FullTextSearch>`_.
