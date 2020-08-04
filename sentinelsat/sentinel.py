@@ -554,20 +554,20 @@ class SentinelAPI:
         if band_list:
             if str.startswith(product_info['title'], 'S2'):
                 band_dict = {
-                    'B01': 'IMG_DATA_Band_60m_1_Tile1_Data',
-                    'B02': 'IMG_DATA_Band_10m_1_Tile1_Data',
-                    'B03': 'IMG_DATA_Band_10m_2_Tile1_Data',
-                    'B04': 'IMG_DATA_Band_10m_3_Tile1_Data',
-                    'B05': 'IMG_DATA_Band_20m_1_Tile1_Data',
-                    'B06': 'IMG_DATA_Band_20m_2_Tile1_Data',
-                    'B07': 'IMG_DATA_Band_20m_3_Tile1_Data',
-                    'B08': 'IMG_DATA_Band_10m_4_Tile1_Data',
-                    'B09': 'IMG_DATA_Band_60m_2_Tile1_Data',
-                    'B10': 'IMG_DATA_Band_60m_3_Tile1_Data',
-                    'B11': 'IMG_DATA_Band_20m_5_Tile1_Data',
-                    'B12': 'IMG_DATA_Band_20m_6_Tile1_Data',
-                    'B8A': 'IMG_DATA_Band_20m_4_Tile1_Data',
-                    'TCI': 'IMG_DATA_Band_TCI_Tile1_Data'
+                    'B01': 'IMG_DATA_Band_B01_60m_Tile1_Data',
+                    'B02': 'IMG_DATA_Band_B02_10m_Tile1_Data',
+                    'B03': 'IMG_DATA_Band_B03_10m_Tile1_Data',
+                    'B04': 'IMG_DATA_Band_B04_10m_Tile1_Data',
+                    'B05': 'IMG_DATA_Band_B05_20m_Tile1_Data',
+                    'B06': 'IMG_DATA_Band_B06_20m_Tile1_Data',
+                    'B07': 'IMG_DATA_Band_B07_20m_Tile1_Data',
+                    'B08': 'IMG_DATA_Band_B08_10m_Tile1_Data',
+                    'B09': 'IMG_DATA_Band_B09_60m_Tile1_Data',
+                    'B10': 'IMG_DATA_Band_B10_60m_Tile1_Data',
+                    'B11': 'IMG_DATA_Band_B11_20m_Tile1_Data',
+                    'B12': 'IMG_DATA_Band_B12_20m_Tile1_Data',
+                    'B8A': 'IMG_DATA_Band_B8A_20m_Tile1_Data',
+                    'TCI': 'IMG_DATA_Band_TCI_10m_Tile1_Data'
                 }
                 manifest = self.get_product_manifest(id, product_info['title'])
                 files_info = []
@@ -579,9 +579,11 @@ class SentinelAPI:
                     file_info['url'] = '/'.join(product_info['url'].split('/')[:-1]) + f"/Nodes('{product_info['title']}.SAFE')/"
                     file_info['url'] += '/'.join([f"Nodes('{token}')" for token in file_info['href'].split('/')[1:]]) + '/$value'
 
-                    if not exists(join(directory_path, product_info['title'])):
-                        mkdir(join(directory_path, product_info['title']))
-                    path = join(directory_path, product_info['title'], file_info['href'].split('/')[-1])
+					# Modified so not to create new directories for each downloaded file. And removed sensor and ingestion datetime from filename.
+                    #if not exists(join(directory_path, product_info['title'])):
+                    #    mkdir(join(directory_path, product_info['title']))
+                    #path = join(directory_path, product_info['title'], file_info['href'].split('/')[-1])
+                    path = join(directory_path, file_info['href'].split('/')[-1])
 
                     self.logger.info('Downloading band %s of %s to %s', band_id, id, path)
                     file_info = self._download_file_with_resume(file_info, path)
